@@ -74,10 +74,31 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
+const BWS_SECRET_REF_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const BwsSecretRefSchema = z
+  .object({
+    source: z.literal("bws"),
+    provider: z
+      .string()
+      .regex(
+        SECRET_PROVIDER_ALIAS_PATTERN,
+        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+      ),
+    id: z
+      .string()
+      .regex(
+        BWS_SECRET_REF_ID_PATTERN,
+        'BWS secret reference id must be a UUID (example: "a0b1c2d3-e4f5-6789-abcd-ef0123456789").',
+      ),
+  })
+  .strict();
+
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
+  BwsSecretRefSchema,
 ]);
 
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
@@ -141,10 +162,36 @@ const SecretsExecProviderSchema = z
   })
   .strict();
 
+const SecretsBwsProviderSchema = z
+  .object({
+    source: z.literal("bws"),
+    accessToken: z.string().min(1).optional(),
+    accessTokenEnv: z.string().regex(ENV_SECRET_REF_ID_PATTERN).optional(),
+    serverUrl: z.string().url().optional(),
+    profileName: z.string().min(1).max(128).optional(),
+    command: z
+      .string()
+      .min(1)
+      .refine(
+        (value) => isAbsolutePath(value),
+        "secrets.providers.*.command must be an absolute path.",
+      )
+      .optional(),
+    timeoutMs: z.number().int().positive().max(120000).optional(),
+    maxOutputBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(20 * 1024 * 1024)
+      .optional(),
+  })
+  .strict();
+
 export const SecretProviderSchema = z.discriminatedUnion("source", [
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
+  SecretsBwsProviderSchema,
 ]);
 
 export const SecretsConfigSchema = z
@@ -160,6 +207,7 @@ export const SecretsConfigSchema = z
         env: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         file: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         exec: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
+        bws: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
       })
       .strict()
       .optional(),

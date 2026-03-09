@@ -4,7 +4,7 @@ export function buildSecretInputSchema() {
   return z.union([
     z.string(),
     z.object({
-      source: z.enum(["env", "file", "exec"]),
+      source: z.enum(["env", "file", "exec", "bws"]),
       provider: z.string().min(1),
       id: z.string().min(1),
     }),

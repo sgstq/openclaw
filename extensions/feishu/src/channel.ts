@@ -50,7 +50,7 @@ const secretInputJsonSchema = {
       additionalProperties: false,
       required: ["source", "provider", "id"],
       properties: {
-        source: { type: "string", enum: ["env", "file", "exec"] },
+        source: { type: "string", enum: ["env", "file", "exec", "bws"] },
         provider: { type: "string", minLength: 1 },
         id: { type: "string", minLength: 1 },
       },

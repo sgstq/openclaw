@@ -15,6 +15,7 @@ export type SecretRefDefaultsCarrier = {
       env?: string;
       file?: string;
       exec?: string;
+      bws?: string;
     };
     providers?: Record<string, { source?: string }>;
   };
@@ -34,7 +35,9 @@ export function resolveDefaultSecretProviderAlias(
       ? config.secrets?.defaults?.env
       : source === "file"
         ? config.secrets?.defaults?.file
-        : config.secrets?.defaults?.exec;
+        : source === "bws"
+          ? config.secrets?.defaults?.bws
+          : config.secrets?.defaults?.exec;
   if (configured?.trim()) {
     return configured.trim();
   }
