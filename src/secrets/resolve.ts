@@ -10,6 +10,7 @@ import type {
   SecretRef,
   SecretRefSource,
 } from "../config/types.secrets.js";
+import { resolveExecutablePath } from "../infra/executable-path.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -792,9 +793,14 @@ const DEFAULT_BWS_MAX_OUTPUT_BYTES = 1024 * 1024;
 async function findBwsCommand(
   providerConfig: BwsSecretProviderConfig,
   providerName: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<string> {
   if (providerConfig.command) {
     return providerConfig.command;
+  }
+  const resolvedFromPath = resolveExecutablePath("bws", { env });
+  if (resolvedFromPath) {
+    return resolvedFromPath;
   }
   // Look up `bws` in common paths
   const candidates =
@@ -849,7 +855,7 @@ async function resolveBwsRefs(params: {
 
   let bwsCommand: string;
   try {
-    bwsCommand = await findBwsCommand(params.providerConfig, params.providerName);
+    bwsCommand = await findBwsCommand(params.providerConfig, params.providerName, params.env);
   } catch (err) {
     throwUnknownProviderResolutionError({
       source: "bws",
