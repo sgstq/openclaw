@@ -377,7 +377,15 @@ export async function setupChannels(
       return undefined;
     }
     const accountId = resolveChannelDefaultAccountId({ plugin, cfg: next });
-    const account = plugin.config.resolveAccount(next, accountId);
+    let account: ReturnType<typeof plugin.config.resolveAccount>;
+    try {
+      // Channel selection hints are read-only UI. They should not require a
+      // runtime-resolved config snapshot just to decide whether a channel is
+      // disabled.
+      account = plugin.config.resolveAccount(next, accountId);
+    } catch {
+      return undefined;
+    }
     let enabled: boolean | undefined;
     if (plugin.config.isEnabled) {
       enabled = plugin.config.isEnabled(account, next);
