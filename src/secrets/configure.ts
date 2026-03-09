@@ -108,11 +108,15 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
     if (defaults?.exec === providerAlias) {
       delete defaults.exec;
     }
+    if (defaults?.bws === providerAlias) {
+      delete defaults.bws;
+    }
     if (
       defaults &&
       defaults.env === undefined &&
       defaults.file === undefined &&
-      defaults.exec === undefined
+      defaults.exec === undefined &&
+      defaults.bws === undefined
     ) {
       delete config.secrets?.defaults;
     }
@@ -126,6 +130,9 @@ function providerHint(provider: SecretProviderConfig): string {
   }
   if (provider.source === "file") {
     return `file (${provider.mode ?? "json"})`;
+  }
+  if (provider.source === "bws") {
+    return `bws${provider.profileName ? ` (profile: ${provider.profileName})` : ""}`;
   }
   return `exec (${provider.jsonOnly === false ? "json+text" : "json"})`;
 }
@@ -144,6 +151,9 @@ function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource
   }
   if (hasSource("exec")) {
     choices.push({ value: "exec", label: "exec" });
+  }
+  if (hasSource("bws")) {
+    choices.push({ value: "bws", label: "bws (Bitwarden Secrets Manager)" });
   }
   return choices;
 }
@@ -401,6 +411,7 @@ async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRe
         { value: "env", label: "env" },
         { value: "file", label: "file" },
         { value: "exec", label: "exec" },
+        { value: "bws", label: "bws (Bitwarden Secrets Manager)" },
       ],
       initialValue: initial,
     }),
@@ -616,6 +627,116 @@ async function promptExecProvider(
   };
 }
 
+async function promptBwsProvider(
+  base?: Extract<SecretProviderConfig, { source: "bws" }>,
+): Promise<Extract<SecretProviderConfig, { source: "bws" }>> {
+  const tokenMode = assertNoCancel(
+    await select({
+      message: "How do you want to provide the BWS access token?",
+      options: [
+        { value: "inline", label: "Paste token now", hint: "Stored in openclaw.json" },
+        { value: "env", label: "Environment variable", hint: "Read from env at runtime" },
+      ],
+      initialValue: base?.accessToken ? "inline" : "env",
+    }),
+    "Secrets configure cancelled.",
+  );
+
+  let accessToken: string | undefined;
+  let accessTokenEnvValue: string | undefined;
+
+  if (tokenMode === "inline") {
+    const tokenRaw = assertNoCancel(
+      await text({
+        message: "BWS access token",
+        initialValue: base?.accessToken ?? "",
+        validate: (value) => {
+          const trimmed = String(value ?? "").trim();
+          if (!trimmed) {
+            return "Required";
+          }
+          return undefined;
+        },
+      }),
+      "Secrets configure cancelled.",
+    );
+    accessToken = String(tokenRaw).trim();
+  } else {
+    const envRaw = assertNoCancel(
+      await text({
+        message: "Access token env var name (blank for BWS_ACCESS_TOKEN)",
+        initialValue: base?.accessTokenEnv ?? "",
+        validate: (value) => {
+          const trimmed = String(value ?? "").trim();
+          if (!trimmed) {
+            return undefined;
+          }
+          if (!ENV_NAME_PATTERN.test(trimmed)) {
+            return "Must be a valid env var name (UPPER_CASE)";
+          }
+          return undefined;
+        },
+      }),
+      "Secrets configure cancelled.",
+    );
+    accessTokenEnvValue = String(envRaw ?? "").trim() || undefined;
+  }
+
+  const serverUrl = assertNoCancel(
+    await text({
+      message: "Server URL (blank for Bitwarden cloud)",
+      initialValue: base?.serverUrl ?? "",
+    }),
+    "Secrets configure cancelled.",
+  );
+
+  const profileName = assertNoCancel(
+    await text({
+      message: "BWS profile name (blank for default)",
+      initialValue: base?.profileName ?? "",
+    }),
+    "Secrets configure cancelled.",
+  );
+
+  const command = assertNoCancel(
+    await text({
+      message: "bws command path (blank to auto-detect)",
+      initialValue: base?.command ?? "",
+      validate: (value) => {
+        const trimmed = String(value ?? "").trim();
+        if (!trimmed) {
+          return undefined;
+        }
+        if (!isAbsolutePathValue(trimmed)) {
+          return "Must be an absolute path";
+        }
+        return undefined;
+      },
+    }),
+    "Secrets configure cancelled.",
+  );
+
+  const timeoutMs = await promptOptionalPositiveInt({
+    message: "Timeout ms (blank for default 10000)",
+    initialValue: base?.timeoutMs,
+    max: 120000,
+  });
+
+  const serverUrlTrimmed = String(serverUrl ?? "").trim();
+  const profileNameTrimmed = String(profileName ?? "").trim();
+  const commandTrimmed = String(command ?? "").trim();
+
+  return {
+    source: "bws",
+    ...(accessToken ? { accessToken } : {}),
+    ...(accessTokenEnvValue ? { accessTokenEnv: accessTokenEnvValue } : {}),
+    ...(serverUrlTrimmed ? { serverUrl: serverUrlTrimmed } : {}),
+    ...(profileNameTrimmed ? { profileName: profileNameTrimmed } : {}),
+    ...(commandTrimmed ? { command: commandTrimmed } : {}),
+    ...(timeoutMs ? { timeoutMs } : {}),
+  };
+}
+
 async function promptProviderConfig(
   source: SecretRefSource,
   current?: SecretProviderConfig,
@@ -625,6 +746,9 @@ async function promptProviderConfig(
   }
   if (source === "file") {
     return await promptFileProvider(current?.source === "file" ? current : undefined);
+  }
+  if (source === "bws") {
+    return await promptBwsProvider(current?.source === "bws" ? current : undefined);
   }
   return await promptExecProvider(current?.source === "exec" ? current : undefined);
 }

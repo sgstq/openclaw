@@ -1,4 +1,4 @@
-export type SecretRefSource = "env" | "file" | "exec"; // pragma: allowlist secret
+export type SecretRefSource = "env" | "file" | "exec" | "bws"; // pragma: allowlist secret
 
 /**
  * Stable identifier for a secret in a configured source.
@@ -21,6 +21,7 @@ type SecretDefaults = {
   env?: string;
   file?: string;
   exec?: string;
+  bws?: string;
 };
 
 export function isValidEnvSecretRefId(value: string): boolean {
@@ -39,7 +40,10 @@ export function isSecretRef(value: unknown): value is SecretRef {
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec" ||
+      value.source === "bws") &&
     typeof value.provider === "string" &&
     value.provider.trim().length > 0 &&
     typeof value.id === "string" &&
@@ -54,7 +58,10 @@ function isLegacySecretRefWithoutProvider(
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
+    (value.source === "env" ||
+      value.source === "file" ||
+      value.source === "exec" ||
+      value.source === "bws") &&
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
     value.provider === undefined
@@ -89,7 +96,9 @@ export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): Secr
         ? (defaults?.env ?? DEFAULT_SECRET_PROVIDER_ALIAS)
         : value.source === "file"
           ? (defaults?.file ?? DEFAULT_SECRET_PROVIDER_ALIAS)
-          : (defaults?.exec ?? DEFAULT_SECRET_PROVIDER_ALIAS);
+          : value.source === "bws"
+            ? (defaults?.bws ?? DEFAULT_SECRET_PROVIDER_ALIAS)
+            : (defaults?.exec ?? DEFAULT_SECRET_PROVIDER_ALIAS);
     return {
       source: value.source,
       provider,
@@ -204,10 +213,29 @@ export type ExecSecretProviderConfig = {
   allowSymlinkCommand?: boolean;
 };
 
+export type BwsSecretProviderConfig = {
+  source: "bws";
+  /** Inline BWS access token. Takes precedence over accessTokenEnv. */
+  accessToken?: string;
+  /** Env var name holding the BWS access token. Defaults to BWS_ACCESS_TOKEN. */
+  accessTokenEnv?: string;
+  /** Server URL for self-hosted Bitwarden instances. */
+  serverUrl?: string;
+  /** BWS CLI profile name. */
+  profileName?: string;
+  /** Absolute path to the `bws` binary. Resolved via PATH when omitted. */
+  command?: string;
+  /** Timeout per BWS call in ms. */
+  timeoutMs?: number;
+  /** Max output bytes from BWS. */
+  maxOutputBytes?: number;
+};
+
 export type SecretProviderConfig =
   | EnvSecretProviderConfig
   | FileSecretProviderConfig
-  | ExecSecretProviderConfig;
+  | ExecSecretProviderConfig
+  | BwsSecretProviderConfig;
 
 export type SecretsConfig = {
   providers?: Record<string, SecretProviderConfig>;
@@ -215,6 +243,7 @@ export type SecretsConfig = {
     env?: string;
     file?: string;
     exec?: string;
+    bws?: string;
   };
   resolution?: {
     maxProviderConcurrency?: number;

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
+  BwsSecretProviderConfig,
   ExecSecretProviderConfig,
   FileSecretProviderConfig,
   SecretProviderConfig,
@@ -186,6 +187,9 @@ function resolveConfiguredProvider(ref: SecretRef, config: OpenClawConfig): Secr
   if (!providerConfig) {
     if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
       return { source: "env" };
+    }
+    if (ref.source === "bws" && ref.provider === resolveDefaultSecretProviderAlias(config, "bws")) {
+      return { source: "bws" };
     }
     throw providerResolutionError({
       source: ref.source,
@@ -781,6 +785,180 @@ async function resolveExecRefs(params: {
   return resolved;
 }
 
+const DEFAULT_BWS_ACCESS_TOKEN_ENV = "BWS_ACCESS_TOKEN";
+const DEFAULT_BWS_TIMEOUT_MS = 10_000;
+const DEFAULT_BWS_MAX_OUTPUT_BYTES = 1024 * 1024;
+
+async function findBwsCommand(
+  providerConfig: BwsSecretProviderConfig,
+  providerName: string,
+): Promise<string> {
+  if (providerConfig.command) {
+    return providerConfig.command;
+  }
+  // Look up `bws` in common paths
+  const candidates =
+    process.platform === "win32"
+      ? ["bws.exe"]
+      : ["/usr/local/bin/bws", "/usr/bin/bws", `${process.env.HOME}/.cargo/bin/bws`];
+  for (const candidate of candidates) {
+    try {
+      const stat = await fs.stat(candidate);
+      if (stat.isFile()) {
+        return candidate;
+      }
+    } catch {
+      // not found, try next
+    }
+  }
+  throw providerResolutionError({
+    source: "bws",
+    provider: providerName,
+    message: `BWS CLI not found. Install it (https://bitwarden.com/help/secrets-manager-cli/) and either add it to your PATH or set secrets.providers.${providerName}.command to its absolute path.`,
+  });
+}
+
+async function resolveBwsRefs(params: {
+  refs: SecretRef[];
+  providerName: string;
+  providerConfig: BwsSecretProviderConfig;
+  env: NodeJS.ProcessEnv;
+  limits: ResolutionLimits;
+}): Promise<ProviderResolutionOutput> {
+  const ids = [...new Set(params.refs.map((ref) => ref.id))];
+  if (ids.length > params.limits.maxRefsPerProvider) {
+    throw providerResolutionError({
+      source: "bws",
+      provider: params.providerName,
+      message: `BWS provider "${params.providerName}" exceeded maxRefsPerProvider (${params.limits.maxRefsPerProvider}).`,
+    });
+  }
+
+  // Inline token takes precedence over env var lookup.
+  const accessToken = isNonEmptyString(params.providerConfig.accessToken)
+    ? params.providerConfig.accessToken
+    : params.env[params.providerConfig.accessTokenEnv ?? DEFAULT_BWS_ACCESS_TOKEN_ENV];
+  if (!isNonEmptyString(accessToken)) {
+    const envName = params.providerConfig.accessTokenEnv ?? DEFAULT_BWS_ACCESS_TOKEN_ENV;
+    throw providerResolutionError({
+      source: "bws",
+      provider: params.providerName,
+      message: `BWS provider "${params.providerName}" requires either an inline "accessToken" or the environment variable "${envName}" to be set.`,
+    });
+  }
+
+  let bwsCommand: string;
+  try {
+    bwsCommand = await findBwsCommand(params.providerConfig, params.providerName);
+  } catch (err) {
+    throwUnknownProviderResolutionError({
+      source: "bws",
+      provider: params.providerName,
+      err,
+    });
+  }
+
+  const timeoutMs = normalizePositiveInt(params.providerConfig.timeoutMs, DEFAULT_BWS_TIMEOUT_MS);
+  const maxOutputBytes = normalizePositiveInt(
+    params.providerConfig.maxOutputBytes,
+    DEFAULT_BWS_MAX_OUTPUT_BYTES,
+  );
+
+  const childEnv: NodeJS.ProcessEnv = {
+    BWS_ACCESS_TOKEN: accessToken,
+    PATH: params.env.PATH,
+    HOME: params.env.HOME,
+  };
+  if (params.providerConfig.serverUrl) {
+    childEnv.BWS_SERVER_URL = params.providerConfig.serverUrl;
+  }
+
+  const resolved = new Map<string, unknown>();
+
+  // Fetch each secret individually via `bws secret get <id>`
+  for (const id of ids) {
+    const args = ["secret", "get", id];
+    if (params.providerConfig.profileName) {
+      args.push("--profile", params.providerConfig.profileName);
+    }
+
+    let result: ExecRunResult;
+    try {
+      result = await runExecResolver({
+        command: bwsCommand,
+        args,
+        cwd: process.cwd(),
+        env: childEnv,
+        input: "",
+        timeoutMs,
+        noOutputTimeoutMs: timeoutMs,
+        maxOutputBytes,
+      });
+    } catch (err) {
+      throw refResolutionError({
+        source: "bws",
+        provider: params.providerName,
+        refId: id,
+        message: `BWS provider "${params.providerName}" failed to spawn for secret "${id}": ${describeUnknownError(err)}`,
+        cause: err,
+      });
+    }
+
+    if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+      throw refResolutionError({
+        source: "bws",
+        provider: params.providerName,
+        refId: id,
+        message: `BWS provider "${params.providerName}" timed out fetching secret "${id}" after ${timeoutMs}ms.`,
+      });
+    }
+    if (result.code !== 0) {
+      const hint = result.stderr.trim() ? ` (${result.stderr.trim().slice(0, 200)})` : "";
+      throw refResolutionError({
+        source: "bws",
+        provider: params.providerName,
+        refId: id,
+        message: `BWS provider "${params.providerName}" exited with code ${String(result.code)} for secret "${id}"${hint}.`,
+      });
+    }
+
+    const trimmed = result.stdout.trim();
+    if (!trimmed) {
+      throw refResolutionError({
+        source: "bws",
+        provider: params.providerName,
+        refId: id,
+        message: `BWS provider "${params.providerName}" returned empty output for secret "${id}".`,
+      });
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed) as unknown;
+    } catch {
+      throw refResolutionError({
+        source: "bws",
+        provider: params.providerName,
+        refId: id,
+        message: `BWS provider "${params.providerName}" returned invalid JSON for secret "${id}".`,
+      });
+    }
+
+    if (!isRecord(parsed) || typeof parsed.value !== "string") {
+      throw refResolutionError({
+        source: "bws",
+        provider: params.providerName,
+        refId: id,
+        message: `BWS provider "${params.providerName}" returned unexpected format for secret "${id}" (missing "value" field).`,
+      });
+    }
+
+    resolved.set(id, parsed.value);
+  }
+
+  return resolved;
+}
+
 async function resolveProviderRefs(params: {
   refs: SecretRef[];
   source: SecretRefSource;
@@ -808,6 +986,15 @@ async function resolveProviderRefs(params: {
     }
     if (params.providerConfig.source === "exec") {
       return await resolveExecRefs({
+        refs: params.refs,
+        providerName: params.providerName,
+        providerConfig: params.providerConfig,
+        env: params.options.env ?? process.env,
+        limits: params.limits,
+      });
+    }
+    if (params.providerConfig.source === "bws") {
+      return await resolveBwsRefs({
         refs: params.refs,
         providerName: params.providerName,
         providerConfig: params.providerConfig,

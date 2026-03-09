@@ -173,12 +173,13 @@ export async function promptSecretRefForOnboarding(params: {
     }
 
     const externalProviders = Object.entries(params.config.secrets?.providers ?? {}).filter(
-      ([, provider]) => provider?.source === "file" || provider?.source === "exec",
+      ([, provider]) =>
+        provider?.source === "file" || provider?.source === "exec" || provider?.source === "bws",
     );
     if (externalProviders.length === 0) {
       await params.prompter.note(
         params.copy?.noProvidersMessage ??
-          "No file/exec secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
+          "No file/exec/bws secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
         "No providers configured",
       );
       continue;
@@ -194,13 +195,23 @@ export async function promptSecretRefForOnboarding(params: {
       options: externalProviders.map(([providerName, provider]) => ({
         value: providerName,
         label: providerName,
-        hint: provider?.source === "exec" ? "Exec provider" : "File provider",
+        hint:
+          provider?.source === "exec"
+            ? "Exec provider"
+            : provider?.source === "bws"
+              ? "BWS provider"
+              : "File provider",
       })),
     });
     const providerEntry = params.config.secrets?.providers?.[selectedProvider];
-    if (!providerEntry || (providerEntry.source !== "file" && providerEntry.source !== "exec")) {
+    if (
+      !providerEntry ||
+      (providerEntry.source !== "file" &&
+        providerEntry.source !== "exec" &&
+        providerEntry.source !== "bws")
+    ) {
       await params.prompter.note(
-        `Provider "${selectedProvider}" is not a file/exec provider.`,
+        `Provider "${selectedProvider}" is not a file/exec/bws provider.`,
         "Invalid provider",
       );
       continue;
@@ -208,17 +219,26 @@ export async function promptSecretRefForOnboarding(params: {
     const idPrompt =
       providerEntry.source === "file"
         ? "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)"
-        : "Secret id for the exec provider";
+        : providerEntry.source === "bws"
+          ? "BWS secret UUID"
+          : "Secret id for the exec provider";
     const idDefault =
       providerEntry.source === "file"
         ? providerEntry.mode === "singleValue"
           ? "value"
           : defaultFilePointer
-        : `${params.provider}/apiKey`;
+        : providerEntry.source === "bws"
+          ? ""
+          : `${params.provider}/apiKey`;
     const idRaw = await params.prompter.text({
       message: idPrompt,
       initialValue: idDefault,
-      placeholder: providerEntry.source === "file" ? "/providers/openai/apiKey" : "openai/api-key",
+      placeholder:
+        providerEntry.source === "file"
+          ? "/providers/openai/apiKey"
+          : providerEntry.source === "bws"
+            ? "a0b1c2d3-e4f5-6789-abcd-ef0123456789"
+            : "openai/api-key",
       validate: (value) => {
         const candidate = value.trim();
         if (!candidate) {

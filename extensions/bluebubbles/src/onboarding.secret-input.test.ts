@@ -13,7 +13,11 @@ vi.mock("openclaw/plugin-sdk/bluebubbles", () => ({
       return false;
     }
     const ref = value as { source?: unknown; provider?: unknown; id?: unknown };
-    const validSource = ref.source === "env" || ref.source === "file" || ref.source === "exec";
+    const validSource =
+      ref.source === "env" ||
+      ref.source === "file" ||
+      ref.source === "exec" ||
+      ref.source === "bws";
     return (
       validSource &&
       typeof ref.provider === "string" &&
