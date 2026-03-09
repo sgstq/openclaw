@@ -38,7 +38,11 @@ export type SecretRefOnboardingPromptCopy = {
   envVarMissingError?: (envVar: string) => string;
   noProvidersMessage?: string;
   envValidatedMessage?: (envVar: string) => string;
-  providerValidatedMessage?: (provider: string, id: string, source: "file" | "exec") => string;
+  providerValidatedMessage?: (
+    provider: string,
+    id: string,
+    source: "file" | "exec" | "bws",
+  ) => string;
 };
 
 function formatErrorMessage(error: unknown): string {
