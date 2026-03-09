@@ -50,6 +50,12 @@ describe("secret ref resolver", () => {
     mode: "json" | "singleValue";
     timeoutMs?: number;
   };
+  type BwsProviderConfig = {
+    source: "bws";
+    accessTokenEnv?: string;
+    command?: string;
+    timeoutMs?: number;
+  };
 
   function createExecProviderConfig(
     command: string,
@@ -89,6 +95,14 @@ describe("secret ref resolver", () => {
       source: "file",
       path: filePath,
       mode: "json",
+      ...overrides,
+    };
+  }
+
+  function createBwsProviderConfig(overrides: Partial<BwsProviderConfig> = {}): BwsProviderConfig {
+    return {
+      source: "bws",
+      accessTokenEnv: "BWS_ACCESS_TOKEN",
       ...overrides,
     };
   }
@@ -343,6 +357,45 @@ describe("secret ref resolver", () => {
     await expect(resolveExecSecret(execInvalidJsonScriptPath, { jsonOnly: true })).rejects.toThrow(
       "returned invalid JSON",
     );
+  });
+
+  itPosix("resolves BWS refs using the caller PATH when command is omitted", async () => {
+    const root = await createCaseDir("bws-path");
+    const binDir = path.join(root, "bin");
+    const bwsPath = path.join(binDir, "bws");
+    await fs.mkdir(binDir, { recursive: true });
+    await writeSecureFile(
+      bwsPath,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "secret" ] && [ "$2" = "get" ] && [ "$3" = "293ffe57-72ec-43ad-a485-b40800b7ace0" ]; then',
+        '  printf \'{"id":"293ffe57-72ec-43ad-a485-b40800b7ace0","value":"bws-secret-value"}\'',
+        "  exit 0",
+        "fi",
+        'printf \'{"error":"unexpected args"}\' >&2',
+        "exit 1",
+      ].join("\n"),
+      0o700,
+    );
+
+    const value = await resolveSecretRefString(
+      { source: "bws", provider: "default", id: "293ffe57-72ec-43ad-a485-b40800b7ace0" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              default: createBwsProviderConfig(),
+            },
+          },
+        },
+        env: {
+          BWS_ACCESS_TOKEN: "test-bws-token",
+          PATH: binDir,
+          HOME: root,
+        },
+      },
+    );
+    expect(value).toBe("bws-secret-value");
   });
 
   itPosix("supports file singleValue mode with id=value", async () => {
